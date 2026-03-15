@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import axios from 'axios';
-
-const SERVER = process.env.REACT_APP_SERVER || 'http://localhost:3001';
+const SERVER = 'https://telegram-clone-5x39.onrender.com';
 const socket = io(SERVER);
 
 const STICKERS = ['😂','❤️','🔥','👍','😮','😢','🎉','💯'];
