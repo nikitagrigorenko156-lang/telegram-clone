@@ -191,7 +191,7 @@ export default function App() {
   };
 
   const s = {
-    screen:{background:bg,minHeight:'100vh',color:text,fontFamily:'sans-serif',display:'flex',flexDirection:'column'},
+    screen:{background:bg,minHeight:'100dvh',color:text,fontFamily:'sans-serif',display:'flex',flexDirection:'column'},
     header:{background:card,padding:'12px 16px',display:'flex',alignItems:'center',gap:10,boxShadow:'0 1px 3px rgba(0,0,0,0.2)'},
     inp:{width:'100%',background:theme==='dark'?'#242f3d':'#f0f2f5',border:'none',borderRadius:10,padding:'10px 14px',color:text,fontSize:'1rem',outline:'none',marginBottom:12,boxSizing:'border-box'},
     btn:{width:'100%',background:accent,border:'none',borderRadius:10,padding:'12px',color:'#fff',fontSize:'1rem',fontWeight:'bold',cursor:'pointer'},
