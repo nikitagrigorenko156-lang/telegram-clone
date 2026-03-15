@@ -5,10 +5,19 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static('uploads'));
+
+const storage = multer.diskStorage({
+  destination: 'uploads/',
+  filename: (req, file, cb) => cb(null, Date.now()+path.extname(file.originalname))
+});
+const upload = multer({ storage, limits:{fileSize:5*1024*1024} });
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret123';
@@ -43,13 +52,17 @@ const initDB = async () => {
         from_user VARCHAR(50) NOT NULL,
         text TEXT NOT NULL,
         type VARCHAR(20) DEFAULT 'text',
+        reply_to INTEGER DEFAULT NULL,
+        reply_text TEXT DEFAULT NULL,
         read_by TEXT[] DEFAULT '{}',
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
-    pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW()").catch(()=>{});
-    pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS online BOOLEAN DEFAULT false").catch(()=>{});
-    console.log("DB ready");;
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW()`).catch(()=>{});
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS online BOOLEAN DEFAULT false`).catch(()=>{});
+    await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL`).catch(()=>{});
+    await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_text TEXT DEFAULT NULL`).catch(()=>{});
+    console.log('DB ready');
   } catch(e) { console.log('DB error:', e.message); }
 };
 initDB();
@@ -102,6 +115,19 @@ app.get('/messages/:room', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.delete('/messages/:id', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM messages WHERE id=$1 AND from_user=$2', [req.params.id, req.user.username]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/upload', auth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  const url = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+  res.json({ url });
+});
+
 app.post('/groups', auth, async (req, res) => {
   const { name, icon, members } = req.body;
   try {
@@ -136,16 +162,23 @@ const onlineUsers = {};
 io.on('connection', (socket) => {
   socket.on('online', async (username) => {
     onlineUsers[username] = socket.id;
-    await pool.query('UPDATE users SET online=true WHERE username=$1', [username]);
+    await pool.query('UPDATE users SET online=true WHERE username=$1', [username]).catch(()=>{});
     io.emit('userOnline', username);
   });
   socket.on('join', (room) => socket.join(room));
   socket.on('message', async (data) => {
     try {
-      const r = await pool.query('INSERT INTO messages (room,from_user,text,type) VALUES ($1,$2,$3,$4) RETURNING id', [data.room, data.from, data.text, data.type||'text']);
+      const r = await pool.query(
+        'INSERT INTO messages (room,from_user,text,type,reply_to,reply_text) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+        [data.room, data.from, data.text, data.type||'text', data.reply_to||null, data.reply_text||null]
+      );
       data.dbId = r.rows[0].id;
     } catch(e) { console.log('msg error:', e.message); }
     io.to(data.room).emit('message', data);
+  });
+  socket.on('deleteMessage', async (data) => {
+    await pool.query('DELETE FROM messages WHERE id=$1 AND from_user=$2', [data.id, data.from]).catch(()=>{});
+    io.to(data.room).emit('messageDeleted', data.id);
   });
   socket.on('reaction', (data) => io.to(data.room).emit('reaction', data));
   socket.on('typing', (data) => socket.to(data.room).emit('typing', data));
@@ -153,7 +186,7 @@ io.on('connection', (socket) => {
     const username = Object.keys(onlineUsers).find(k => onlineUsers[k] === socket.id);
     if (username) {
       delete onlineUsers[username];
-      await pool.query('UPDATE users SET online=false, last_seen=NOW() WHERE username=$1', [username]);
+      await pool.query('UPDATE users SET online=false, last_seen=NOW() WHERE username=$1', [username]).catch(()=>{});
       io.emit('userOffline', username);
     }
   });
