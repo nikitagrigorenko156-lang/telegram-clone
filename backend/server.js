@@ -18,25 +18,28 @@ const pool = new Pool({
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret123';
 
 const initDB = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      username VARCHAR(50) UNIQUE NOT NULL,
-      password VARCHAR(255) NOT NULL,
-      avatar VARCHAR(10) DEFAULT '👤',
-      online BOOLEAN DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS messages (
-      id SERIAL PRIMARY KEY,
-      room VARCHAR(100) NOT NULL,
-      from_user VARCHAR(50) NOT NULL,
-      text TEXT NOT NULL,
-      type VARCHAR(20) DEFAULT 'text',
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `);
-  console.log('DB ready');
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        avatar VARCHAR(10) DEFAULT '👤',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        room VARCHAR(100) NOT NULL,
+        from_user VARCHAR(50) NOT NULL,
+        text TEXT NOT NULL,
+        type VARCHAR(20) DEFAULT 'text',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+    console.log('DB ready');
+  } catch(e) {
+    console.log('DB error:', e.message);
+  }
 };
 initDB();
 
@@ -49,6 +52,8 @@ const auth = (req, res, next) => {
   } catch { res.status(401).json({ error: 'Invalid token' }); }
 };
 
+app.get('/', (req, res) => res.json({ status: 'ok' }));
+
 app.post('/register', async (req, res) => {
   const { username, password, avatar } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Required' });
@@ -60,7 +65,7 @@ app.post('/register', async (req, res) => {
     );
     const token = jwt.sign({ id: r.rows[0].id, username }, JWT_SECRET);
     res.json({ token, user: r.rows[0] });
-  } catch (e) {
+  } catch(e) {
     res.status(400).json({ error: 'Username taken' });
   }
 });
@@ -74,17 +79,21 @@ app.post('/login', async (req, res) => {
     if (!ok) return res.status(400).json({ error: 'Wrong password' });
     const token = jwt.sign({ id: r.rows[0].id, username }, JWT_SECRET);
     res.json({ token, user: { id: r.rows[0].id, username, avatar: r.rows[0].avatar } });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/users', auth, async (req, res) => {
-  const r = await pool.query('SELECT id,username,avatar,online FROM users WHERE username!=$1', [req.user.username]);
-  res.json(r.rows);
+  try {
+    const r = await pool.query('SELECT id,username,avatar FROM users WHERE username!=$1', [req.user.username]);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/messages/:room', auth, async (req, res) => {
-  const r = await pool.query('SELECT * FROM messages WHERE room=$1 ORDER BY created_at ASC LIMIT 100', [req.params.room]);
-  res.json(r.rows);
+  try {
+    const r = await pool.query('SELECT * FROM messages WHERE room=$1 ORDER BY created_at ASC LIMIT 100', [req.params.room]);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 const server = http.createServer(app);
@@ -93,8 +102,10 @@ const io = new Server(server, { cors: { origin: '*' } });
 io.on('connection', (socket) => {
   socket.on('join', (room) => socket.join(room));
   socket.on('message', async (data) => {
-    await pool.query('INSERT INTO messages (room,from_user,text,type) VALUES ($1,$2,$3,$4)',
-      [data.room, data.from, data.text, data.type || 'text']);
+    try {
+      await pool.query('INSERT INTO messages (room,from_user,text,type) VALUES ($1,$2,$3,$4)',
+        [data.room, data.from, data.text, data.type || 'text']);
+    } catch(e) { console.log('msg error:', e.message); }
     io.to(data.room).emit('message', data);
   });
 });
