@@ -239,7 +239,7 @@ export default function App() {
   };
 
   const s = {
-    screen:{background:bg,height:'100dvh',color:text,fontFamily:'sans-serif',display:'flex',flexDirection:'column',overflow:'hidden'},
+    screen:{background:bg,minHeight:'100dvh',height:'100%',color:text,fontFamily:'sans-serif',display:'flex',flexDirection:'column',overflow:'auto'},
     header:{background:card,padding:'12px 16px',display:'flex',alignItems:'center',gap:10,boxShadow:'0 1px 3px rgba(0,0,0,0.2)',flexShrink:0},
     inp:{width:'100%',background:inputBg,border:'none',borderRadius:10,padding:'10px 14px',color:text,fontSize:'1rem',outline:'none',marginBottom:12,boxSizing:'border-box'},
     btn:{width:'100%',background:accent,border:'none',borderRadius:10,padding:'12px',color:'#fff',fontSize:'1rem',fontWeight:'bold',cursor:'pointer'},
@@ -260,7 +260,7 @@ export default function App() {
       <div style={{flex:1,overflowY:'auto',padding:'0 0 20px'}}>
         <div style={{background:card,borderRadius:16,padding:24,margin:24}}>
           <div style={{fontSize:'1.5rem',fontWeight:'bold',color:accent,marginBottom:16,textAlign:'center'}}>{authTab==='login'?'Войти':'Регистрация'}</div>
-          <div style={{display:'flex',marginBottom:16,borderRadius:8,overflow:'hidden'}}>
+          <div style={{display:'flex',marginBottom:16,borderRadius:8,overflow:'auto'}}>
             <button style={{flex:1,padding:'10px',background:authTab==='login'?accent:'#242f3d',border:'none',color:'#fff',cursor:'pointer'}} onClick={()=>{setAuthTab('login');setError('');}}>Войти</button>
             <button style={{flex:1,padding:'10px',background:authTab==='reg'?accent:'#242f3d',border:'none',color:'#fff',cursor:'pointer'}} onClick={()=>{setAuthTab('reg');setError('');}}>Регистрация</button>
           </div>
@@ -352,9 +352,9 @@ export default function App() {
                   <span style={{fontSize:'2rem'}}>{u.avatar}</span>
                   {u.online&&<span style={{position:'absolute',bottom:0,right:0,width:10,height:10,background:'#4caf50',borderRadius:'50%',border:`2px solid ${card}`}}/>}
                 </div>
-                <div style={{flex:1,overflow:'hidden'}}>
+                <div style={{flex:1,overflow:'auto'}}>
                   <div style={{fontWeight:'bold'}}>{u.username}</div>
-                  <div style={{color:sub,fontSize:'0.8rem',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{getLastMsg(room)}</div>
+                  <div style={{color:sub,fontSize:'0.8rem',overflow:'auto',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{getLastMsg(room)}</div>
                 </div>
                 {lastMessages[room]&&<div style={{color:sub,fontSize:'0.7rem'}}>{new Date(lastMessages[room].created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>}
               </div>
@@ -368,9 +368,9 @@ export default function App() {
             return (
               <div key={g.id} style={s.listItem} onClick={()=>openGroup(g)}>
                 <span style={{fontSize:'2rem'}}>{g.icon}</span>
-                <div style={{flex:1,overflow:'hidden'}}>
+                <div style={{flex:1,overflow:'auto'}}>
                   <div style={{fontWeight:'bold'}}>{g.name}</div>
-                  <div style={{color:sub,fontSize:'0.8rem',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{getLastMsg(room)}</div>
+                  <div style={{color:sub,fontSize:'0.8rem',overflow:'auto',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{getLastMsg(room)}</div>
                 </div>
               </div>
             );
@@ -420,7 +420,7 @@ export default function App() {
         <div style={{background:theme==='dark'?'#1e2d3d':'#e8f4fd',padding:'8px 16px',borderLeft:`3px solid ${accent}`,display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
           <div style={{flex:1}}>
             <div style={{fontSize:'0.75rem',color:accent}}>↩️ {replyTo.from}</div>
-            <div style={{fontSize:'0.85rem',color:sub,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{replyTo.text}</div>
+            <div style={{fontSize:'0.85rem',color:sub,overflow:'auto',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{replyTo.text}</div>
           </div>
           <button style={{...s.iconBtn,fontSize:'1rem'}} onClick={()=>setReplyTo(null)}>✕</button>
         </div>
@@ -441,7 +441,7 @@ export default function App() {
                 onClick={e=>{e.stopPropagation();setSelectedMsg(selectedMsg?.id===msg.id?null:msg);}}
               >
                 {!mine&&activeInfo?.type==='group'&&<div style={{fontSize:'0.75rem',color:accent,fontWeight:'bold',marginBottom:2,cursor:'pointer'}} onClick={()=>openProfile(msg.from)}>{msg.from}</div>}
-                {msg.reply_text&&<div style={{fontSize:'0.8rem',color:sub,borderLeft:`2px solid ${accent}`,paddingLeft:6,marginBottom:4,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>↩️ {msg.reply_text}</div>}
+                {msg.reply_text&&<div style={{fontSize:'0.8rem',color:sub,borderLeft:`2px solid ${accent}`,paddingLeft:6,marginBottom:4,overflow:'auto',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>↩️ {msg.reply_text}</div>}
                 {msg.type==='image'?<img src={msg.text} alt="фото" style={{maxWidth:'100%',borderRadius:8,display:'block'}}/>:
                  msg.type==='voice'?<span style={{color:accent}}>🎤 ▶ ━━━━━ 0:03</span>:
                  msg.text}
