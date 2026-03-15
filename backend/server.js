@@ -6,21 +6,21 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const multer = require('multer');
-const path = require('path');
+const cloudinary = require('cloudinary').v2;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
 
-const storage = multer.diskStorage({
-  destination: 'uploads/',
-  filename: (req, file, cb) => cb(null, Date.now()+path.extname(file.originalname))
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
-const upload = multer({ storage, limits:{fileSize:5*1024*1024} });
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret123';
+const upload = multer({ storage: multer.memoryStorage(), limits:{fileSize:10*1024*1024} });
 
 const initDB = async () => {
   try {
@@ -30,6 +30,7 @@ const initDB = async () => {
         username VARCHAR(50) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL,
         avatar VARCHAR(10) DEFAULT '👤',
+        bio TEXT DEFAULT '',
         online BOOLEAN DEFAULT false,
         last_seen TIMESTAMP DEFAULT NOW(),
         created_at TIMESTAMP DEFAULT NOW()
@@ -54,10 +55,13 @@ const initDB = async () => {
         type VARCHAR(20) DEFAULT 'text',
         reply_to INTEGER DEFAULT NULL,
         reply_text TEXT DEFAULT NULL,
+        edited BOOLEAN DEFAULT false,
         read_by TEXT[] DEFAULT '{}',
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT ''`).catch(()=>{});
+    await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT false`).catch(()=>{});
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW()`).catch(()=>{});
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS online BOOLEAN DEFAULT false`).catch(()=>{});
     await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to INTEGER DEFAULT NULL`).catch(()=>{});
@@ -96,22 +100,56 @@ app.post('/login', async (req, res) => {
     if (!ok) return res.status(400).json({ error: 'Wrong password' });
     await pool.query('UPDATE users SET online=true WHERE username=$1', [username]);
     const token = jwt.sign({ id: r.rows[0].id, username }, JWT_SECRET);
-    res.json({ token, user: { id: r.rows[0].id, username, avatar: r.rows[0].avatar } });
+    res.json({ token, user: { id: r.rows[0].id, username, avatar: r.rows[0].avatar, bio: r.rows[0].bio } });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/users', auth, async (req, res) => {
   try {
-    const r = await pool.query('SELECT id,username,avatar,online FROM users WHERE username!=$1 ORDER BY online DESC, username ASC', [req.user.username]);
+    const r = await pool.query('SELECT id,username,avatar,online,bio FROM users WHERE username!=$1 ORDER BY online DESC, username ASC', [req.user.username]);
     res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/profile/:username', auth, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT id,username,avatar,online,bio,last_seen,created_at FROM users WHERE username=$1', [req.params.username]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/profile', auth, async (req, res) => {
+  const { avatar, bio } = req.body;
+  try {
+    const r = await pool.query('UPDATE users SET avatar=$1, bio=$2 WHERE username=$3 RETURNING id,username,avatar,bio', [avatar, bio, req.user.username]);
+    res.json(r.data);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/messages/:room', auth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM messages WHERE room=$1 ORDER BY created_at ASC LIMIT 100', [req.params.room]);
-    await pool.query('UPDATE messages SET read_by = array_append(read_by, $1) WHERE room=$2 AND NOT ($1 = ANY(read_by))', [req.user.username, req.params.room]);
+    await pool.query('UPDATE messages SET read_by = array_append(read_by, $1) WHERE room=$2 AND NOT ($1 = ANY(read_by))', [req.user.username, req.params.room]).catch(()=>{});
     res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/lastmessages', auth, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT DISTINCT ON (room) room, from_user, text, type, created_at
+      FROM messages ORDER BY room, created_at DESC
+    `);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/messages/:id', auth, async (req, res) => {
+  const { text } = req.body;
+  try {
+    await pool.query('UPDATE messages SET text=$1, edited=true WHERE id=$2 AND from_user=$3', [text, req.params.id, req.user.username]);
+    res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -122,10 +160,16 @@ app.delete('/messages/:id', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/upload', auth, upload.single('file'), (req, res) => {
+app.post('/upload', auth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-  const url = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-  res.json({ url });
+  try {
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream({ folder: 'teleclone' }, (err, result) => {
+        if (err) reject(err); else resolve(result);
+      }).end(req.file.buffer);
+    });
+    res.json({ url: result.secure_url });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/groups', auth, async (req, res) => {
@@ -133,8 +177,7 @@ app.post('/groups', auth, async (req, res) => {
   try {
     const r = await pool.query('INSERT INTO groups (name,icon,created_by) VALUES ($1,$2,$3) RETURNING *', [name, icon||'👥', req.user.username]);
     const gid = r.rows[0].id;
-    const allMembers = [...new Set([...members, req.user.username])];
-    for (const m of allMembers) {
+    for (const m of [...new Set([...members, req.user.username])]) {
       await pool.query('INSERT INTO group_members (group_id,username) VALUES ($1,$2) ON CONFLICT DO NOTHING', [gid, m]);
     }
     res.json(r.rows[0]);
@@ -175,6 +218,10 @@ io.on('connection', (socket) => {
       data.dbId = r.rows[0].id;
     } catch(e) { console.log('msg error:', e.message); }
     io.to(data.room).emit('message', data);
+  });
+  socket.on('editMessage', async (data) => {
+    await pool.query('UPDATE messages SET text=$1, edited=true WHERE id=$2 AND from_user=$3', [data.text, data.id, data.from]).catch(()=>{});
+    io.to(data.room).emit('messageEdited', data);
   });
   socket.on('deleteMessage', async (data) => {
     await pool.query('DELETE FROM messages WHERE id=$1 AND from_user=$2', [data.id, data.from]).catch(()=>{});
