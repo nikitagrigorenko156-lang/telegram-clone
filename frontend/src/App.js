@@ -9,13 +9,14 @@ const AVATARS = ['👤','😎','🦊','🐱','🐶','🦁','🐸','🤖','👻',
 let socket;
 
 export default function App() {
-  const [screen, setScreen] = useState('auth');
+  const saved = JSON.parse(localStorage.getItem('tguser') || 'null');
+  const [screen, setScreen] = useState(saved ? 'chats' : 'auth');
   const [authTab, setAuthTab] = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [avatar, setAvatar] = useState('👤');
-  const [token, setToken] = useState(null);
-  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(saved?.token || null);
+  const [user, setUser] = useState(saved?.user || null);
   const [error, setError] = useState('');
   const [users, setUsers] = useState([]);
   const [activeRoom, setActiveRoom] = useState(null);
@@ -26,13 +27,31 @@ export default function App() {
   const [reactions, setReactions] = useState({});
   const bottomRef = useRef();
 
+  useEffect(() => {
+    if (saved?.token) {
+      initSocket(saved.token);
+      loadUsers(saved.token);
+    }
+  }, []);
+
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages]);
+
+  const saveSession = (tk, u) => {
+    localStorage.setItem('tguser', JSON.stringify({token: tk, user: u}));
+  };
+
+  const logout = () => {
+    localStorage.removeItem('tguser');
+    setToken(null); setUser(null);
+    setScreen('auth');
+    if (socket) socket.disconnect();
+  };
 
   const register = async () => {
     try {
       const r = await axios.post(SERVER+'/register', {username, password, avatar});
-      setToken(r.data.token);
-      setUser(r.data.user);
+      saveSession(r.data.token, r.data.user);
+      setToken(r.data.token); setUser(r.data.user);
       initSocket(r.data.token);
       loadUsers(r.data.token);
       setScreen('chats');
@@ -42,8 +61,8 @@ export default function App() {
   const login = async () => {
     try {
       const r = await axios.post(SERVER+'/login', {username, password});
-      setToken(r.data.token);
-      setUser(r.data.user);
+      saveSession(r.data.token, r.data.user);
+      setToken(r.data.token); setUser(r.data.user);
       initSocket(r.data.token);
       loadUsers(r.data.token);
       setScreen('chats');
@@ -63,8 +82,7 @@ export default function App() {
 
   const openChat = async (u) => {
     const room = [user.username, u.username].sort().join('_');
-    setActiveRoom(room);
-    setActiveUser(u);
+    setActiveRoom(room); setActiveUser(u);
     socket.emit('join', room);
     const r = await axios.get(SERVER+'/messages/'+room, {headers:{Authorization:'Bearer '+token}});
     setMessages(r.data.map(m => ({...m, from: m.from_user, id: m.id})));
@@ -93,12 +111,12 @@ export default function App() {
     card:{background:'#17212b',borderRadius:16,padding:24,margin:24},
     title:{fontSize:'1.5rem',fontWeight:'bold',color:'#5288c1',marginBottom:16,textAlign:'center'},
     tabs:{display:'flex',marginBottom:16,borderRadius:8,overflow:'hidden'},
-    tabBtn:(active)=>({flex:1,padding:'10px',background:active?'#5288c1':'#242f3d',border:'none',color:'#fff',cursor:'pointer',fontWeight:active?'bold':'normal'}),
-    input:{width:'100%',background:'#242f3d',border:'none',borderRadius:10,padding:'10px 14px',color:'#fff',fontSize:'1rem',outline:'none',marginBottom:12,boxSizing:'border-box'},
+    tabBtn:(a)=>({flex:1,padding:'10px',background:a?'#5288c1':'#242f3d',border:'none',color:'#fff',cursor:'pointer',fontWeight:a?'bold':'normal'}),
+    inp:{width:'100%',background:'#242f3d',border:'none',borderRadius:10,padding:'10px 14px',color:'#fff',fontSize:'1rem',outline:'none',marginBottom:12,boxSizing:'border-box'},
     btn:{width:'100%',background:'#5288c1',border:'none',borderRadius:10,padding:'12px',color:'#fff',fontSize:'1rem',fontWeight:'bold',cursor:'pointer'},
     error:{color:'#e53935',textAlign:'center',marginBottom:8,fontSize:'0.9rem'},
     avatarGrid:{display:'flex',flexWrap:'wrap',gap:8,justifyContent:'center',marginBottom:12},
-    avatarBtn:(selected)=>({fontSize:'1.8rem',background:selected?'#5288c1':'#242f3d',border:'none',borderRadius:8,padding:'4px 8px',cursor:'pointer'}),
+    avatarBtn:(sel)=>({fontSize:'1.8rem',background:sel?'#5288c1':'#242f3d',border:'none',borderRadius:8,padding:'4px 8px',cursor:'pointer'}),
     list:{flex:1,overflowY:'auto'},
     listItem:{display:'flex',alignItems:'center',padding:'12px 16px',borderBottom:'1px solid #17212b',cursor:'pointer',gap:12},
     messages:{flex:1,overflowY:'auto',padding:'12px',display:'flex',flexDirection:'column',gap:8},
@@ -111,7 +129,7 @@ export default function App() {
     stickerPicker:{position:'absolute',bottom:60,left:12,background:'#17212b',borderRadius:12,padding:8,display:'flex',gap:8,flexWrap:'wrap',width:200},
   };
 
-  if (screen === 'auth') return (
+  if (screen==='auth') return (
     <div style={s.screen}>
       <div style={{...s.header,justifyContent:'center'}}>
         <span style={{fontSize:'1.3rem',fontWeight:'bold',color:'#5288c1'}}>✈️ TeleClone</span>
@@ -123,38 +141,31 @@ export default function App() {
           <button style={s.tabBtn(authTab==='reg')} onClick={()=>{setAuthTab('reg');setError('');}}>Регистрация</button>
         </div>
         {error?<div style={s.error}>{error}</div>:null}
-        <input style={s.input} placeholder="Никнейм" value={username} onChange={e=>setUsername(e.target.value)}/>
-        <input style={s.input} placeholder="Пароль" type="password" value={password} onChange={e=>setPassword(e.target.value)}/>
+        <input style={s.inp} placeholder="Никнейм" value={username} onChange={e=>setUsername(e.target.value)}/>
+        <input style={s.inp} placeholder="Пароль" type="password" value={password} onChange={e=>setPassword(e.target.value)}/>
         {authTab==='reg'&&<>
           <div style={{marginBottom:8,color:'#aaa'}}>Выбери аватар:</div>
-          <div style={s.avatarGrid}>
-            {AVATARS.map(a=><button key={a} style={s.avatarBtn(avatar===a)} onClick={()=>setAvatar(a)}>{a}</button>)}
-          </div>
+          <div style={s.avatarGrid}>{AVATARS.map(a=><button key={a} style={s.avatarBtn(avatar===a)} onClick={()=>setAvatar(a)}>{a}</button>)}</div>
         </>}
-        <button style={s.btn} onClick={authTab==='login'?login:register}>
-          {authTab==='login'?'Войти':'Создать аккаунт'}
-        </button>
+        <button style={s.btn} onClick={authTab==='login'?login:register}>{authTab==='login'?'Войти':'Создать аккаунт'}</button>
       </div>
     </div>
   );
 
-  if (screen === 'chats') return (
+  if (screen==='chats') return (
     <div style={s.screen}>
       <div style={s.header}>
         <span style={{fontSize:'1.5rem'}}>{user?.avatar}</span>
         <span style={{fontWeight:'bold',flex:1}}>{user?.username}</span>
-        <button style={{...s.back,fontSize:'1rem'}} onClick={()=>{setToken(null);setUser(null);setScreen('auth');}}>Выйти</button>
+        <button style={{...s.back,fontSize:'1rem'}} onClick={logout}>Выйти</button>
       </div>
-      <div style={{padding:'12px 16px',color:'#6b7f94',fontSize:'0.9rem'}}>👥 Пользователи онлайн</div>
+      <div style={{padding:'12px 16px',color:'#6b7f94',fontSize:'0.9rem'}}>👥 Все пользователи</div>
       <div style={s.list}>
         {users.length===0&&<div style={{textAlign:'center',color:'#6b7f94',padding:32}}>Нет других пользователей</div>}
         {users.map(u=>(
           <div key={u.id} style={s.listItem} onClick={()=>openChat(u)}>
             <span style={{fontSize:'2rem'}}>{u.avatar}</span>
-            <div>
-              <div style={{fontWeight:'bold'}}>{u.username}</div>
-              <div style={{color:'#6b7f94',fontSize:'0.8rem'}}>Нажми чтобы написать</div>
-            </div>
+            <div><div style={{fontWeight:'bold'}}>{u.username}</div><div style={{color:'#6b7f94',fontSize:'0.8rem'}}>Нажми чтобы написать</div></div>
           </div>
         ))}
       </div>
