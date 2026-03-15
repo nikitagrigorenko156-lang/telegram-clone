@@ -47,7 +47,9 @@ const initDB = async () => {
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
-    console.log('DB ready');
+    pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW()").catch(()=>{});
+    pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS online BOOLEAN DEFAULT false").catch(()=>{});
+    console.log("DB ready");;
   } catch(e) { console.log('DB error:', e.message); }
 };
 initDB();
