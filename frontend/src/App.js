@@ -7,8 +7,6 @@ const STICKERS = ['😂','❤️','🔥','👍','😮','😢','🎉','💯'];
 const AVATARS = ['👤','😎','🦊','🐱','🐶','🦁','🐸','🤖','👻','🎃'];
 const GROUP_ICONS = ['👥','🎮','📚','🎵','💼','⚽','🍕','✈️'];
 
-let socket;
-
 export default function App() {
   const saved = JSON.parse(localStorage.getItem('tguser')||'null');
   const [screen, setScreen] = useState(saved?'chats':'auth');
@@ -37,6 +35,7 @@ export default function App() {
   const [theme, setTheme] = useState('dark');
   const bottomRef = useRef();
   const typingRef = useRef();
+  const socketRef = useRef(null);
 
   const bg = theme==='dark'?'#0e1621':'#f0f2f5';
   const card = theme==='dark'?'#17212b':'#ffffff';
@@ -47,7 +46,7 @@ export default function App() {
   const bubble2 = theme==='dark'?'#182533':'#fff';
 
   useEffect(() => {
-    if (saved?.token) { initSocket(saved.token); loadAll(saved.token); }
+    if (saved?.token) { initSocket(saved.user.username); loadAll(saved.token); }
   }, []);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages]);
@@ -55,21 +54,53 @@ export default function App() {
   useEffect(() => {
     if (!searchQ.trim()) { setSearchRes([]); return; }
     const t = setTimeout(async () => {
-      const r = await axios.get(`${SERVER}/search/${searchQ}`, {headers:{Authorization:'Bearer '+token}});
-      setSearchRes(r.data);
+      try {
+        const r = await axios.get(`${SERVER}/search/${searchQ}`, {headers:{Authorization:'Bearer '+token}});
+        setSearchRes(r.data);
+      } catch(e){}
     }, 400);
     return () => clearTimeout(t);
   }, [searchQ]);
 
+  const initSocket = (uname) => {
+    if (socketRef.current) socketRef.current.disconnect();
+    const s = io(SERVER, {transports:['websocket','polling']});
+    socketRef.current = s;
+    s.on('connect', () => { s.emit('online', uname); });
+    s.on('message', msg => setMessages(p=>[...p, msg]));
+    s.on('typing', data => {
+      setTyping(data.from+' печатает...');
+      clearTimeout(typingRef.current);
+      typingRef.current = setTimeout(()=>setTyping(''), 2000);
+    });
+    s.on('userOnline', uname => setUsers(p=>p.map(u=>u.username===uname?{...u,online:true}:u)));
+    s.on('userOffline', uname => setUsers(p=>p.map(u=>u.username===uname?{...u,online:false}:u)));
+  };
+
+  const loadAll = async (tk) => {
+    try {
+      const [ur, gr] = await Promise.all([
+        axios.get(SERVER+'/users', {headers:{Authorization:'Bearer '+tk}}),
+        axios.get(SERVER+'/groups', {headers:{Authorization:'Bearer '+tk}})
+      ]);
+      setUsers(ur.data); setGroups(gr.data);
+    } catch(e){}
+  };
+
   const saveSession = (tk, u) => localStorage.setItem('tguser', JSON.stringify({token:tk, user:u}));
-  const logout = () => { localStorage.removeItem('tguser'); setToken(null); setUser(null); setScreen('auth'); if(socket) socket.disconnect(); };
+
+  const logout = () => {
+    localStorage.removeItem('tguser');
+    if(socketRef.current) socketRef.current.disconnect();
+    setToken(null); setUser(null); setScreen('auth');
+  };
 
   const register = async () => {
     try {
       const r = await axios.post(SERVER+'/register', {username, password, avatar});
       saveSession(r.data.token, r.data.user);
       setToken(r.data.token); setUser(r.data.user);
-      initSocket(r.data.token); loadAll(r.data.token); setScreen('chats');
+      initSocket(r.data.user.username); loadAll(r.data.token); setScreen('chats');
     } catch(e) { setError(e.response?.data?.error||'Ошибка'); }
   };
 
@@ -78,71 +109,55 @@ export default function App() {
       const r = await axios.post(SERVER+'/login', {username, password});
       saveSession(r.data.token, r.data.user);
       setToken(r.data.token); setUser(r.data.user);
-      initSocket(r.data.token); loadAll(r.data.token); setScreen('chats');
+      initSocket(r.data.user.username); loadAll(r.data.token); setScreen('chats');
     } catch(e) { setError(e.response?.data?.error||'Ошибка'); }
-  };
-
-  const initSocket = (tk) => {
-    socket = io(SERVER);
-    socket.on('connect', () => socket.emit('online', JSON.parse(localStorage.getItem('tguser'))?.user?.username));
-    socket.on('message', msg => setMessages(p=>[...p, msg]));
-    socket.on('reaction', data => {});
-    socket.on('typing', data => {
-      setTyping(data.from+' печатает...');
-      clearTimeout(typingRef.current);
-      typingRef.current = setTimeout(()=>setTyping(''), 2000);
-    });
-    socket.on('userOnline', uname => setUsers(p=>p.map(u=>u.username===uname?{...u,online:true}:u)));
-    socket.on('userOffline', uname => setUsers(p=>p.map(u=>u.username===uname?{...u,online:false}:u)));
-  };
-
-  const loadAll = async (tk) => {
-    const [ur, gr] = await Promise.all([
-      axios.get(SERVER+'/users', {headers:{Authorization:'Bearer '+tk}}),
-      axios.get(SERVER+'/groups', {headers:{Authorization:'Bearer '+tk}})
-    ]);
-    setUsers(ur.data); setGroups(gr.data);
   };
 
   const openChat = async (u) => {
     const room = [user.username, u.username].sort().join('_');
     setActiveRoom(room); setActiveInfo({...u, type:'user'});
-    socket.emit('join', room);
-    const r = await axios.get(SERVER+'/messages/'+room, {headers:{Authorization:'Bearer '+token}});
-    setMessages(r.data.map(m=>({...m, from:m.from_user, id:m.created_at+m.id})));
+    socketRef.current?.emit('join', room);
+    try {
+      const r = await axios.get(SERVER+'/messages/'+room, {headers:{Authorization:'Bearer '+token}});
+      setMessages(r.data.map(m=>({...m, from:m.from_user, id:m.id+m.created_at})));
+    } catch(e){ setMessages([]); }
     setScreen('chat'); setSearchQ(''); setSearchRes([]);
   };
 
   const openGroup = async (g) => {
     const room = 'group_'+g.id;
     setActiveRoom(room); setActiveInfo({...g, type:'group'});
-    socket.emit('join', room);
-    const r = await axios.get(SERVER+'/messages/'+room, {headers:{Authorization:'Bearer '+token}});
-    setMessages(r.data.map(m=>({...m, from:m.from_user, id:m.created_at+m.id})));
+    socketRef.current?.emit('join', room);
+    try {
+      const r = await axios.get(SERVER+'/messages/'+room, {headers:{Authorization:'Bearer '+token}});
+      setMessages(r.data.map(m=>({...m, from:m.from_user, id:m.id+m.created_at})));
+    } catch(e){ setMessages([]); }
     setScreen('chat');
   };
 
   const createGroup = async () => {
     if (!groupName.trim()) return;
-    const r = await axios.post(SERVER+'/groups', {name:groupName, icon:groupIcon, members:groupMembers}, {headers:{Authorization:'Bearer '+token}});
-    setGroups(p=>[...p, r.data]);
-    setShowNewGroup(false); setGroupName(''); setGroupMembers([]);
-    openGroup(r.data);
+    try {
+      const r = await axios.post(SERVER+'/groups', {name:groupName, icon:groupIcon, members:groupMembers}, {headers:{Authorization:'Bearer '+token}});
+      setGroups(p=>[...p, r.data]);
+      setShowNewGroup(false); setGroupName(''); setGroupMembers([]);
+      openGroup(r.data);
+    } catch(e){}
   };
 
   const sendMessage = () => {
-    if (!input.trim()) return;
-    socket.emit('message', {room:activeRoom, text:input, from:user.username, id:Date.now(), type:'text'});
+    if (!input.trim() || !socketRef.current) return;
+    socketRef.current.emit('message', {room:activeRoom, text:input, from:user.username, id:Date.now(), type:'text'});
     setInput('');
   };
 
   const handleTyping = (e) => {
     setInput(e.target.value);
-    socket.emit('typing', {room:activeRoom, from:user.username});
+    socketRef.current?.emit('typing', {room:activeRoom, from:user.username});
   };
 
   const sendSticker = (e) => {
-    socket.emit('message', {room:activeRoom, text:e, from:user.username, id:Date.now(), type:'sticker'});
+    socketRef.current?.emit('message', {room:activeRoom, text:e, from:user.username, id:Date.now(), type:'sticker'});
     setShowStickers(false);
   };
 
@@ -160,15 +175,11 @@ export default function App() {
     stickerPicker:{position:'absolute',bottom:60,left:12,background:card,borderRadius:12,padding:8,display:'flex',gap:8,flexWrap:'wrap',width:220,boxShadow:'0 4px 20px rgba(0,0,0,0.3)'},
     tabs:{display:'flex',background:card,borderBottom:`1px solid ${theme==='dark'?'#293748':'#eee'}`},
     tab:(a)=>({flex:1,padding:'10px',background:'none',border:'none',color:a?accent:sub,cursor:'pointer',borderBottom:a?`2px solid ${accent}`:'none',fontWeight:a?'bold':'normal'}),
-    searchBar:{padding:'8px 16px',background:card},
-    searchInp:{width:'100%',background:theme==='dark'?'#242f3d':'#f0f2f5',border:'none',borderRadius:20,padding:'8px 14px',color:text,fontSize:'0.95rem',outline:'none',boxSizing:'border-box'},
   };
 
   if (screen==='auth') return (
     <div style={s.screen}>
-      <div style={{...s.header,justifyContent:'center'}}>
-        <span style={{fontSize:'1.3rem',fontWeight:'bold',color:accent}}>✈️ TeleClone</span>
-      </div>
+      <div style={{...s.header,justifyContent:'center'}}><span style={{fontSize:'1.3rem',fontWeight:'bold',color:accent}}>✈️ TeleClone</span></div>
       <div style={{background:card,borderRadius:16,padding:24,margin:24}}>
         <div style={{fontSize:'1.5rem',fontWeight:'bold',color:accent,marginBottom:16,textAlign:'center'}}>{authTab==='login'?'Войти':'Регистрация'}</div>
         <div style={{display:'flex',marginBottom:16,borderRadius:8,overflow:'hidden'}}>
@@ -194,21 +205,18 @@ export default function App() {
       <div style={s.header}>
         <span style={{fontSize:'1.5rem'}}>{user?.avatar}</span>
         <span style={{fontWeight:'bold',flex:1,color:text}}>{user?.username}</span>
-        <button style={{...s.iconBtn}} onClick={()=>setTheme(t=>t==='dark'?'light':'dark')}>{theme==='dark'?'☀️':'🌙'}</button>
+        <button style={s.iconBtn} onClick={()=>setTheme(t=>t==='dark'?'light':'dark')}>{theme==='dark'?'☀️':'🌙'}</button>
         <button style={{...s.iconBtn,fontSize:'1rem',color:accent}} onClick={logout}>Выйти</button>
       </div>
-      <div style={s.searchBar}>
-        <input style={s.searchInp} placeholder="🔍 Поиск пользователей..." value={searchQ} onChange={e=>setSearchQ(e.target.value)}/>
+      <div style={{padding:'8px 16px',background:card}}>
+        <input style={{...s.inp,marginBottom:0}} placeholder="🔍 Поиск пользователей..." value={searchQ} onChange={e=>setSearchQ(e.target.value)}/>
       </div>
       {searchRes.length>0&&(
         <div style={{background:card,borderBottom:`1px solid ${theme==='dark'?'#293748':'#eee'}`}}>
           {searchRes.map(u=>(
             <div key={u.id} style={s.listItem} onClick={()=>openChat(u)}>
               <span style={{fontSize:'2rem'}}>{u.avatar}</span>
-              <div>
-                <div style={{fontWeight:'bold',color:text}}>{u.username}</div>
-                <div style={{color:u.online?'#4caf50':sub,fontSize:'0.8rem'}}>{u.online?'🟢 онлайн':'офлайн'}</div>
-              </div>
+              <div><div style={{fontWeight:'bold',color:text}}>{u.username}</div><div style={{color:u.online?'#4caf50':sub,fontSize:'0.8rem'}}>{u.online?'🟢 онлайн':'офлайн'}</div></div>
             </div>
           ))}
         </div>
@@ -228,15 +236,13 @@ export default function App() {
               </div>
               <div>
                 <div style={{fontWeight:'bold',color:text}}>{u.username}</div>
-                <div style={{color:sub,fontSize:'0.8rem'}}>{u.online?'🟢 онлайн':'офлайн'}</div>
+                <div style={{color:u.online?'#4caf50':sub,fontSize:'0.8rem'}}>{u.online?'🟢 онлайн':'офлайн'}</div>
               </div>
             </div>
           ))}
         </>}
         {tab==='groups'&&<>
-          <div style={{padding:'12px 16px'}}>
-            <button style={{...s.btn,marginBottom:0}} onClick={()=>setShowNewGroup(true)}>+ Создать группу</button>
-          </div>
+          <div style={{padding:'12px 16px'}}><button style={s.btn} onClick={()=>setShowNewGroup(true)}>+ Создать группу</button></div>
           {groups.map(g=>(
             <div key={g.id} style={s.listItem} onClick={()=>openGroup(g)}>
               <span style={{fontSize:'2rem'}}>{g.icon}</span>
@@ -254,7 +260,7 @@ export default function App() {
             <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}}>
               {GROUP_ICONS.map(i=><button key={i} style={{fontSize:'1.5rem',background:groupIcon===i?accent:'#242f3d',border:'none',borderRadius:8,padding:'4px 8px',cursor:'pointer'}} onClick={()=>setGroupIcon(i)}>{i}</button>)}
             </div>
-            <div style={{marginBottom:8,color:sub}}>Добавить участников:</div>
+            <div style={{marginBottom:8,color:sub}}>Участники:</div>
             {users.map(u=>(
               <div key={u.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0',cursor:'pointer'}} onClick={()=>setGroupMembers(p=>p.includes(u.username)?p.filter(x=>x!==u.username):[...p,u.username])}>
                 <span style={{fontSize:'1.4rem'}}>{u.avatar}</span>
@@ -304,13 +310,9 @@ export default function App() {
       </div>
       <div style={s.inputBar}>
         <button style={s.iconBtn} onClick={()=>setShowStickers(p=>!p)}>😊</button>
-        {showStickers&&(
-          <div style={s.stickerPicker}>
-            {STICKERS.map(e=><span key={e} style={{fontSize:'1.8rem',cursor:'pointer'}} onClick={()=>sendSticker(e)}>{e}</span>)}
-          </div>
-        )}
+        {showStickers&&<div style={s.stickerPicker}>{STICKERS.map(e=><span key={e} style={{fontSize:'1.8rem',cursor:'pointer'}} onClick={()=>sendSticker(e)}>{e}</span>)}</div>}
         <input style={s.msgInput} value={input} onChange={handleTyping} onKeyDown={e=>e.key==='Enter'&&sendMessage()} placeholder="Сообщение..."/>
-        <button style={s.iconBtn} onClick={()=>socket.emit('message',{room:activeRoom,text:'🎤 Голосовое',from:user.username,id:Date.now(),type:'voice'})}>🎤</button>
+        <button style={s.iconBtn} onClick={()=>socketRef.current?.emit('message',{room:activeRoom,text:'🎤 Голосовое',from:user.username,id:Date.now(),type:'voice'})}>🎤</button>
         <button style={s.sendBtn} onClick={sendMessage}>➤</button>
       </div>
     </div>
